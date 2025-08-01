@@ -18,7 +18,6 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -33,12 +32,10 @@ import androidx.compose.ui.draw.alpha // For the alpha modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.IntSize
@@ -49,8 +46,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bumptech.glide.Glide
 import com.bumptech.glide.gifencoder.AnimatedGifEncoder
-import com.bumptech.glide.load.engine.bitmap_recycle.BitmapPool
-import com.bumptech.glide.load.engine.bitmap_recycle.LruBitmapPool
 import com.example.ugh.ui.theme.UghTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -70,10 +65,8 @@ import android.provider.MediaStore
 import android.content.ContentValues
 import android.os.Environment
 import android.util.Log
-import kotlin.math.roundToInt
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.scale
-import com.google.accompanist.systemuicontroller.rememberSystemUiController
 
 // ViewModel to manage the state and logic of the Ugh app
 class UghViewModel : ViewModel() {
@@ -127,7 +120,8 @@ class UghViewModel : ViewModel() {
         private set
 
     // State for the transparency of the onion skin
-    var onionSkinTransparency: MutableState<Float> = mutableStateOf(0.5f) // Default transparency
+    var onionSkinTransparency: MutableState<Float> =
+        mutableFloatStateOf(0.5f) // Default transparency
         private set
 
     // Function to update onion skin transparency
@@ -162,7 +156,7 @@ class UghViewModel : ViewModel() {
         }
     }
 
-    fun performCrop(context: Context) {
+    fun performCrop() {
         val bitmap = scaledBitmap ?: return
         val segments = cropSegments
         val croppedList = mutableListOf<Bitmap>()
@@ -226,7 +220,6 @@ class UghViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val outputStream = ByteArrayOutputStream()
-                val bitmapPool: BitmapPool = LruBitmapPool(1024 * 1024 * 10) // 10MB bitmap pool for Glide
                 val gifEncoder = AnimatedGifEncoder()
                 gifEncoder.start(outputStream)
                 gifEncoder.setDelay(100) // 100ms frame delay
@@ -540,7 +533,7 @@ fun UghApp(viewModel: UghViewModel) {
                     bitmap = bitmap,
                     selectedSegments = viewModel.cropSegments,
                     onSegmentsSelected = { segments -> viewModel.cropSegments = segments },
-                    onConfirmCrop = { viewModel.performCrop(context) }
+                    onConfirmCrop = { viewModel.performCrop() }
                 )
             } ?: run {
                 // If bitmap is unexpectedly null, show a toast and restart the flow
@@ -558,7 +551,6 @@ fun UghApp(viewModel: UghViewModel) {
                     // Pass the current cropped bitmap from the ViewModel's list
                     bitmap = viewModel.croppedBitmaps[currentImageIndex],
                     // Pass the current anchor point from the ViewModel's list
-                    initialAnchorPoint = viewModel.anchorPoints[currentImageIndex],
                     onAnchorPointChanged = { offset -> viewModel.updateCurrentAnchorPoint(offset) },
                     onConfirmAnchorPoint = { viewModel.confirmAnchorPoint(context) },
                     imageIndex = currentImageIndex + 1, // Display 1-based index
@@ -756,76 +748,10 @@ fun ImageCropScreen(
         }
     }
 }
-@Composable
-fun InitialScreen(onStart: () -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Button(onClick = onStart) {
-            Text("Show First Segment")
-        }
-    }
-}
-@Composable
-fun GifAnchorPointSetter(
-    gifBitmaps: List<Bitmap>,
-    onComplete: (List<Offset>) -> Unit // Callback when all anchor points are set
-) {
-    var currentImageIndex by remember { mutableStateOf(-1) } // -1 for initial state
-    var currentDragAnchorPoint by remember { mutableStateOf(Offset.Zero) }
-    val anchorPoints = remember { mutableStateListOf<Offset>() }
-    var transparency by remember { mutableStateOf(1f) } // Add state for transparency
 
-    when (currentImageIndex) {
-        -1 -> {
-            // Initial screen with "Show First Segment" button
-            InitialScreen {
-                currentImageIndex = 0
-            }
-        }
-        in 0 until gifBitmaps.size -> {
-            // Screen for selecting an anchor point for the current image
-            AnchorPointSelectionScreen(
-                bitmap = gifBitmaps[currentImageIndex],
-                initialAnchorPoint = anchorPoints.getOrNull(currentImageIndex) ?: Offset.Zero,
-                onionSkinBitmap = gifBitmaps.getOrNull(currentImageIndex - 1),
-                onionSkinAnchorPoint = anchorPoints.getOrNull(currentImageIndex - 1),
-                onAnchorPointChanged = { newAnchorPoint ->
-                    currentDragAnchorPoint = newAnchorPoint
-                },
-                onTransparencyChanged = { newTransparency ->
-                    transparency = newTransparency
-                },
-                transparency = transparency,
-                onConfirmAnchorPoint = {
-                    // This lambda takes no arguments, matching the function signature
-                    val confirmedAnchorPoint = currentDragAnchorPoint
-                    if (currentImageIndex < anchorPoints.size) {
-                        anchorPoints[currentImageIndex] = confirmedAnchorPoint
-                    } else {
-                        anchorPoints.add(confirmedAnchorPoint)
-                    }
-
-                    if (currentImageIndex == gifBitmaps.size - 1) {
-                        // All done, complete the process
-                        onComplete(anchorPoints)
-                    } else {
-                        // Move to the next image
-                        currentImageIndex++
-                    }
-                },
-                imageIndex = currentImageIndex + 1,
-                totalImages = gifBitmaps.size
-            )
-        }
-    }
-}
 @Composable
 fun AnchorPointSelectionScreen(
     bitmap: Bitmap,
-    initialAnchorPoint: Offset,
     onAnchorPointChanged: (Offset) -> Unit,
     onConfirmAnchorPoint: () -> Unit,
     imageIndex: Int,
@@ -847,10 +773,6 @@ fun AnchorPointSelectionScreen(
         } else {
             Offset.Zero
         }
-    }
-
-    val absoluteAnchorPoint = remember(fixedAnchorPoint, currentImageOffset) {
-        fixedAnchorPoint - currentImageOffset
     }
 
     Scaffold(
