@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.IntOffset // For IntOffset
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bumptech.glide.Glide
@@ -429,14 +430,8 @@ class UghViewModel : ViewModel() {
         }
     }
 
-    /**
-     * Helper function to scale a Bitmap to a maximum height of 2160 pixels,
-     * maintaining its aspect ratio.
-     * @param bitmap The original Bitmap to scale.
-     * @return The scaled Bitmap, or the original if no scaling is needed.
-     */
     private fun scaleBitmap(bitmap: Bitmap): Bitmap {
-        val maxHeight = 2160
+        val maxHeight = 1080
         if (bitmap.height <= maxHeight) {
             return bitmap // No scaling needed if already within limits
         }
@@ -454,6 +449,7 @@ class MainActivity : ComponentActivity() {
     private val viewModel: UghViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
+
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
@@ -482,7 +478,6 @@ fun UghApp(viewModel: UghViewModel) {
     val context = LocalContext.current
     // Observe the current application state from the ViewModel's StateFlow
     val appState by viewModel.currentAppState.collectAsState()
-
     // Launcher for requesting runtime permissions
     val requestPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -491,7 +486,6 @@ fun UghApp(viewModel: UghViewModel) {
             Toast.makeText(context, "Permission denied. Cannot pick images or save GIFs.", Toast.LENGTH_LONG).show()
         }
     }
-
     // Effect to check and request necessary permissions when the app starts
     LaunchedEffect(Unit) {
         val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -506,7 +500,6 @@ fun UghApp(viewModel: UghViewModel) {
             requestPermissionLauncher.launch(permission) // Request the permission
         }
     }
-
     // New LaunchedEffect to handle the onion skin logic
     LaunchedEffect(viewModel.currentAnchorImageIndex) {
         val currentImageIndex = viewModel.currentAnchorImageIndex
@@ -518,7 +511,6 @@ fun UghApp(viewModel: UghViewModel) {
             viewModel.setNextOnionSkin(null)
         }
     }
-
     // Display different screens based on the current application state
     when (appState) {
         UghViewModel.AppState.SELECT_IMAGE -> {
@@ -588,11 +580,6 @@ fun UghApp(viewModel: UghViewModel) {
         }
     }
 }
-
-/**
- * Composable screen for selecting an image from the gallery.
- * @param onImageSelected Callback function when an image URI is selected.
- */
 @OptIn(ExperimentalMaterial3Api::class) // Required for PickVisualMediaRequest
 @Composable
 fun ImageSelectionScreen(onImageSelected: (Uri?) -> Unit) {
@@ -751,7 +738,7 @@ fun ImageCropScreen(
                         },
                         modifier = Modifier.padding(4.dp)
                     ) {
-                        Text("$segments segments")
+                        Text("$segments parts")
                     }
                 }
             }
@@ -796,7 +783,7 @@ fun AnchorPointSelectionScreen(
             ) {
                 if (onionSkinBitmap != null) {
                     Text(
-                        text = "Onion Skin Transparency",
+                        text = "Transparency",
                         style = MaterialTheme.typography.titleMedium
                     )
                     Slider(
@@ -1060,7 +1047,6 @@ fun GifPreviewScreen(
         }
     }
 }
-
 /**
  * Preview Composable for the main app's initial screen.
  */

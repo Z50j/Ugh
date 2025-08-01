@@ -55,6 +55,7 @@ dependencies {
 
     // Kotlin Coroutines for asynchronous operations
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.androidx.appcompat)
 
     // Test dependencies
     testImplementation(libs.junit)
@@ -66,4 +67,6 @@ dependencies {
     debugImplementation(libs.ui.test.manifest)
 
     implementation(libs.accompanist.systemuicontroller)
+
+    implementation(libs.androidx.core.splashscreen)
 }
