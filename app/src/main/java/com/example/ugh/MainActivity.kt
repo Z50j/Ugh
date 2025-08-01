@@ -10,7 +10,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
-import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -43,7 +42,6 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.IntOffset // For IntOffset
-import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bumptech.glide.Glide
@@ -52,14 +50,12 @@ import com.example.ugh.ui.theme.UghTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.IOException
 import kotlin.math.roundToInt
-import android.media.MediaScannerConnection
 import androidx.activity.viewModels
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -547,7 +543,6 @@ fun UghApp(viewModel: UghViewModel) {
 
     val context = LocalContext.current
     // Use rememberCoroutineScope() to get a scope tied to the composable's lifecycle
-    val coroutineScope = rememberCoroutineScope()
 
     // Observe the current application state from the ViewModel's StateFlow
     val appState by viewModel.currentAppState.collectAsState()
@@ -1024,7 +1019,6 @@ fun GifPreviewScreen(
     onStartOver: () -> Unit
 ) {
     val context = LocalContext.current
-    val contentResolver = context.contentResolver
 
     Column(
         modifier = Modifier
