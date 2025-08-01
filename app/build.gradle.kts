@@ -45,6 +45,7 @@ dependencies {
     implementation(libs.ui.graphics)
     implementation(libs.ui.tooling.preview)
     implementation(libs.material3)
+    implementation(libs.material)
     implementation(libs.androidx.activity.compose) // For ComponentActivity and rememberLauncherForActivityResult
     implementation(libs.androidx.lifecycle.runtime.ktx) // For viewModelScope
     implementation(libs.androidx.lifecycle.viewmodel.compose) // For by viewModels()

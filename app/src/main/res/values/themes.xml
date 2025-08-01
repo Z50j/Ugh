@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <style name="Theme.Ugh" parent="Theme.Material3.DayNight.NoActionBar">
+    </style>
     <style name="Theme.App.Starting" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">@color/black</item>
-        <item name="windowSplashScreenAnimatedIcon">@drawable/wiggly</item>
+        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_foreground</item>
         <item name="windowSplashScreenIconBackgroundColor">@color/black</item>
         <item name="postSplashScreenTheme">@style/Theme.Ugh</item>
-    </style>
-    <style name="Theme.Ugh" parent="Theme.AppCompat.Light.NoActionBar">
     </style>
 </resources>

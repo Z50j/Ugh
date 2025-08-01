@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -42,6 +43,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.IntOffset // For IntOffset
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bumptech.glide.Glide
@@ -50,10 +52,12 @@ import com.example.ugh.ui.theme.UghTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
+import java.io.IOException
 import kotlin.math.roundToInt
 import android.media.MediaScannerConnection
 import androidx.activity.viewModels
@@ -67,6 +71,7 @@ import android.os.Environment
 import android.util.Log
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.scale
+import androidx.core.net.toUri
 
 // ViewModel to manage the state and logic of the Ugh app
 class UghViewModel : ViewModel() {
@@ -107,10 +112,10 @@ class UghViewModel : ViewModel() {
     // MutableState for the current index of the image being processed for anchor point selection
     var currentAnchorImageIndex by mutableIntStateOf(0)
         private set
+    // Declare the private, mutable StateFlow
+    private var _gifUri = MutableStateFlow<Uri?>(null)
 
-    // MutableState for the generated GIF file URI
-    var gifUri by mutableStateOf<Uri?>(null)
-        private set
+    val gifUri: StateFlow<Uri?> = _gifUri
 
     // MutableState for the GIF compilation progress (0-100)
     var gifCompilationProgress by mutableIntStateOf(0)
@@ -222,10 +227,16 @@ class UghViewModel : ViewModel() {
                 val outputStream = ByteArrayOutputStream()
                 val gifEncoder = AnimatedGifEncoder()
                 gifEncoder.start(outputStream)
-                gifEncoder.setDelay(100) // 100ms frame delay
+                gifEncoder.setDelay(200) // 100ms frame delay
                 gifEncoder.setRepeat(0) // 0 for infinite loop
 
                 val frames = generateWiggleFrames()
+                Log.d("UghViewModel", "Generated frames count: ${frames.size}")
+
+                if (frames.isEmpty()) {
+                    // Handle the case where no frames were generated.
+                    throw IllegalStateException("No frames were generated for the GIF.")
+                }
 
                 for (frame in frames) {
                     gifEncoder.addFrame(frame)
@@ -236,29 +247,39 @@ class UghViewModel : ViewModel() {
 
                 gifEncoder.finish()
 
-                // Save the GIF to internal storage
-                val gifFile = saveGifToFile(context, outputStream.toByteArray())
-                if (gifFile != null) {
-                    gifUri = Uri.fromFile(gifFile)
+                val gifBytes = outputStream.toByteArray()
+                Log.d("UghViewModel", "GIF byte array size: ${gifBytes.size}")
+
+                // If the byte array is empty, the encoder failed.
+                if (gifBytes.isEmpty()) {
+                    throw IllegalStateException("GIF encoder produced an empty byte array.")
+                }
+
+                val tempGifFile = saveGifToCache(context, gifBytes)
+                if (tempGifFile != null) {
+                    Log.d("UghViewModel", "GIF saved to temp file: ${tempGifFile.absolutePath}")
+                    val tempGifUri = tempGifFile.toUri()
+                    _gifUri.value = tempGifUri
+
                     withContext(Dispatchers.Main) {
+                        _gifUri.value = tempGifUri
                         _currentAppState.value = AppState.PREVIEW_GIF
                     }
                 } else {
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(context, "Failed to save GIF.", Toast.LENGTH_SHORT).show()
-                        _currentAppState.value = AppState.SELECT_IMAGE // Go back to start
+                        Toast.makeText(context, "Failed to save GIF to cache.", Toast.LENGTH_SHORT).show()
+                        _currentAppState.value = AppState.SELECT_IMAGE
                     }
                 }
-
             } catch (e: Exception) {
                 e.printStackTrace()
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, "Error compiling GIF: ${e.message}", Toast.LENGTH_LONG).show()
-                    _currentAppState.value = AppState.SELECT_IMAGE // Go back to start
+                    _currentAppState.value = AppState.SELECT_IMAGE
                 }
             } finally {
                 withContext(Dispatchers.Main) {
-                    gifCompilationProgress = 0 // Reset progress
+                    gifCompilationProgress = 0
                 }
             }
         }
@@ -371,30 +392,20 @@ class UghViewModel : ViewModel() {
      * @param gifBytes The byte array of the GIF data.
      * @return The File object if successful, null otherwise.
      */
-    private suspend fun saveGifToFile(context: Context, gifBytes: ByteArray): File? {
-        return withContext(Dispatchers.IO) {
-            val directory = File(
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
-                "wigglegrams"
-            )
-            if (!directory.exists()) {
-                directory.mkdirs() // Create the directory if it doesn't exist
-            }
+    private fun saveGifToCache(context: Context, gifBytes: ByteArray): File? {
+        // Get the app's cache directory
+        val cacheDir = context.cacheDir
+        val tempFile = File(cacheDir, "temp_wigglegram.gif")
 
-            val fileName = "wigglegram_${System.currentTimeMillis()}.gif"
-            val file = File(directory, fileName)
-
-            try {
-                FileOutputStream(file).use { fos ->
-                    fos.write(gifBytes)
-                }
-                // Notify the media scanner about the new file so it appears in the gallery
-                MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), null, null)
-                file
-            } catch (e: Exception) {
-                e.printStackTrace()
-                null
+        return try {
+            // Write the byte array to the temporary file
+            FileOutputStream(tempFile).use { fos ->
+                fos.write(gifBytes)
             }
+            tempFile
+        } catch (e: IOException) {
+            Log.e("UghViewModel", "Error saving GIF to cache: ${e.message}", e)
+            null
         }
     }
 
@@ -409,10 +420,71 @@ class UghViewModel : ViewModel() {
         croppedBitmaps = emptyList()
         anchorPoints = emptyList()
         currentAnchorImageIndex = 0
-        gifUri = null
+        _gifUri.value = null
         gifCompilationProgress = 0
     }
+    // This function should be a member of your MainActivity class.
+    fun saveGif(context: Context, gifUri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val inputStream = context.contentResolver.openInputStream(gifUri)
+                if (inputStream == null) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Failed to read temporary GIF file.", Toast.LENGTH_SHORT).show()
+                    }
+                    Log.e("SaveGif", "Failed to read InputStream from URI: $gifUri")
+                    return@launch
+                }
 
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, "wigglegram_${System.currentTimeMillis()}.gif")
+                    put(MediaStore.MediaColumns.MIME_TYPE, "image/gif")
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + File.separator + "Wigglegrams")
+                    }
+                }
+
+                val resolver = context.contentResolver
+                val outputUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+                if (outputUri == null) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Failed to create new file in MediaStore.", Toast.LENGTH_SHORT).show()
+                    }
+                    Log.e("SaveGif", "Failed to create new file in MediaStore.")
+                    return@launch
+                }
+
+                val outputStream = resolver.openOutputStream(outputUri)
+                if (outputStream != null) {
+                    inputStream.use { input ->
+                        outputStream.use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                } else {
+                    // Handle the case where the outputStream is null
+                    throw IOException("Failed to open output stream.")
+                }
+
+                // Clean up the temporary file
+                try {
+                    context.contentResolver.delete(gifUri, null, null)
+                } catch (e: Exception) {
+                    Log.w("SaveGif", "Failed to delete temporary file: ${e.message}")
+                }
+
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Wigglegram saved successfully!", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                // This single catch block handles all exceptions from the 'try' block
+                Log.e("SaveGif", "Error saving Wigglegram: ${e.message}", e)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Error saving Wigglegram: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
     /**
      * Helper function to convert a content URI to a Bitmap.
      * @param context The application context.
@@ -440,7 +512,6 @@ class UghViewModel : ViewModel() {
         return bitmap.scale(newWidth, maxHeight)
     }
 }
-
 // Main Activity for the Ugh app
 class MainActivity : ComponentActivity() {
 
@@ -448,7 +519,6 @@ class MainActivity : ComponentActivity() {
     private val viewModel: UghViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
-
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
@@ -474,42 +544,50 @@ class MainActivity : ComponentActivity() {
  */
 @Composable
 fun UghApp(viewModel: UghViewModel) {
+
     val context = LocalContext.current
+    // Use rememberCoroutineScope() to get a scope tied to the composable's lifecycle
+    val coroutineScope = rememberCoroutineScope()
+
     // Observe the current application state from the ViewModel's StateFlow
     val appState by viewModel.currentAppState.collectAsState()
-    // Launcher for requesting runtime permissions
+    // Change this line to also collect as state
+    val gifUri by viewModel.gifUri.collectAsState()
+
     val requestPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
         if (!isGranted) {
-            Toast.makeText(context, "Permission denied. Cannot pick images or save GIFs.", Toast.LENGTH_LONG).show()
+            Toast.makeText(
+                context,
+                "Permission denied. Cannot pick images or save GIFs.",
+                Toast.LENGTH_LONG
+            ).show()
         }
     }
+
     // Effect to check and request necessary permissions when the app starts
     LaunchedEffect(Unit) {
         val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // For Android 13 (API 33) and above, use READ_MEDIA_IMAGES
             Manifest.permission.READ_MEDIA_IMAGES
         } else {
-            // For Android 12 (API 31) and below, use READ_EXTERNAL_STORAGE
             Manifest.permission.READ_EXTERNAL_STORAGE
         }
-        // Check if the permission is already granted
         if (context.checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissionLauncher.launch(permission) // Request the permission
+            requestPermissionLauncher.launch(permission)
         }
     }
+
     // New LaunchedEffect to handle the onion skin logic
     LaunchedEffect(viewModel.currentAnchorImageIndex) {
         val currentImageIndex = viewModel.currentAnchorImageIndex
         if (currentImageIndex > 0 && currentImageIndex < viewModel.croppedBitmaps.size) {
-            // If it's not the first image, set the previous image as the onion skin
             viewModel.setNextOnionSkin(viewModel.croppedBitmaps[currentImageIndex - 1])
         } else {
-            // If it's the first image, there is no onion skin
             viewModel.setNextOnionSkin(null)
         }
     }
+
     // Display different screens based on the current application state
     when (appState) {
         UghViewModel.AppState.SELECT_IMAGE -> {
@@ -517,8 +595,8 @@ fun UghApp(viewModel: UghViewModel) {
                 viewModel.setSelectedImageUri(uri, context)
             })
         }
+
         UghViewModel.AppState.CROP_IMAGE -> {
-            // Ensure scaledBitmap is not null before displaying the crop screen
             viewModel.scaledBitmap?.let { bitmap ->
                 ImageCropScreen(
                     bitmap = bitmap,
@@ -527,24 +605,25 @@ fun UghApp(viewModel: UghViewModel) {
                     onConfirmCrop = { viewModel.performCrop() }
                 )
             } ?: run {
-                // If bitmap is unexpectedly null, show a toast and restart the flow
                 LaunchedEffect(Unit) {
-                    Toast.makeText(context, "Image not loaded, please try again.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        context,
+                        "Image not loaded, please try again.",
+                        Toast.LENGTH_SHORT
+                    ).show()
                     viewModel.startOver()
                 }
             }
         }
+
         UghViewModel.AppState.SELECT_ANCHOR_POINTS -> {
             val currentImageIndex = viewModel.currentAnchorImageIndex
-            // Ensure there's a cropped image at the current index
             if (currentImageIndex < viewModel.croppedBitmaps.size) {
                 AnchorPointSelectionScreen(
-                    // Pass the current cropped bitmap from the ViewModel's list
                     bitmap = viewModel.croppedBitmaps[currentImageIndex],
-                    // Pass the current anchor point from the ViewModel's list
                     onAnchorPointChanged = { offset -> viewModel.updateCurrentAnchorPoint(offset) },
                     onConfirmAnchorPoint = { viewModel.confirmAnchorPoint(context) },
-                    imageIndex = currentImageIndex + 1, // Display 1-based index
+                    imageIndex = currentImageIndex + 1,
                     totalImages = viewModel.croppedBitmaps.size,
                     onionSkinBitmap = viewModel.onionSkinBitmap.value,
                     onionSkinAnchorPoint = viewModel.anchorPoints.getOrNull(currentImageIndex - 1),
@@ -552,27 +631,35 @@ fun UghApp(viewModel: UghViewModel) {
                     transparency = viewModel.onionSkinTransparency.value
                 )
             } else {
-                // Fallback for unexpected state
                 LaunchedEffect(Unit) {
-                    Toast.makeText(context, "Error: No image to select anchor point.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        context,
+                        "Error: No image to select anchor point.",
+                        Toast.LENGTH_SHORT
+                    ).show()
                     viewModel.startOver()
                 }
             }
         }
+
         UghViewModel.AppState.COMPILING_GIF -> {
             GifCompilationScreen(progress = viewModel.gifCompilationProgress)
         }
+
         UghViewModel.AppState.PREVIEW_GIF -> {
-            // Ensure gifUri is not null before displaying the preview screen
-            viewModel.gifUri?.let { uri ->
+            gifUri?.let { uri ->
                 GifPreviewScreen(
                     gifUri = uri,
+                    onSaveClicked = { saveUri -> viewModel.saveGif(context, saveUri) },
                     onStartOver = viewModel::startOver
                 )
             } ?: run {
-                // If GIF URI is unexpectedly null, show a toast and restart the flow
                 LaunchedEffect(Unit) {
-                    Toast.makeText(context, "GIF not generated, please try again.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        context,
+                        "GIF not generated, please try again.",
+                        Toast.LENGTH_SHORT
+                    ).show()
                     viewModel.startOver()
                 }
             }
@@ -930,14 +1017,14 @@ fun GifCompilationScreen(progress: Int) {
         )
     }
 }
-
 @Composable
 fun GifPreviewScreen(
-    gifUri: Uri,
+    gifUri: Uri, // Removed the gifBytes parameter
+    onSaveClicked: (Uri) -> Unit, // Add a new callback for saving
     onStartOver: () -> Unit
 ) {
     val context = LocalContext.current
-    val contentResolver = context.contentResolver // Get ContentResolver
+    val contentResolver = context.contentResolver
 
     Column(
         modifier = Modifier
@@ -974,61 +1061,15 @@ fun GifPreviewScreen(
 
         Spacer(Modifier.height(24.dp))
 
-        // MODIFIED BUTTON: Now a "Save" button
         Button(
-            onClick = {
-                // Logic to save the GIF to the public gallery
-                try {
-                    val fileName = "Wigglegram_${System.currentTimeMillis()}.gif"
-                    val contentValues = ContentValues().apply {
-                        put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                        put(MediaStore.MediaColumns.MIME_TYPE, "image/gif")
-                        // For Android 10 (API 29) and above, use MediaStore.Images.Media.RELATIVE_PATH
-                        // For older Android, consider using Environment.getExternalStoragePublicDirectory
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + File.separator + "Wigglegrams")
-                        }
-                        put(MediaStore.MediaColumns.IS_PENDING, 1) // Mark as pending
-                    }
-
-                    val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                    } else {
-                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-                    }
-
-                    val newUri = contentResolver.insert(collection, contentValues)
-
-                    newUri?.let { uri ->
-                        contentResolver.openOutputStream(uri)?.use { outputStream ->
-                            context.contentResolver.openInputStream(gifUri)?.use { inputStream ->
-                                inputStream.copyTo(outputStream)
-                            }
-                        }
-
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            contentValues.clear()
-                            contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
-                            contentResolver.update(uri, contentValues, null, null)
-                        }
-
-                        Toast.makeText(context, "Wigglegram saved to Gallery!", Toast.LENGTH_LONG).show()
-                    } ?: run {
-                        Toast.makeText(context, "Failed to create new GIF file in Gallery.", Toast.LENGTH_LONG).show()
-                    }
-
-                } catch (e: Exception) {
-                    Log.e("GifPreviewScreen", "Error saving GIF: ${e.message}", e)
-                    Toast.makeText(context, "Error saving Wigglegram.", Toast.LENGTH_LONG).show()
-                }
-            },
+            onClick = { onSaveClicked(gifUri) }, // Now it just calls the callback
             modifier = Modifier
                 .fillMaxWidth(0.6f)
                 .height(50.dp)
                 .clip(RoundedCornerShape(12.dp)),
             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
         ) {
-            Text("Save Wigglegram", fontSize = 18.sp) // Changed button text
+            Text("Save Wigglegram", fontSize = 18.sp)
         }
 
         Spacer(Modifier.height(16.dp))
