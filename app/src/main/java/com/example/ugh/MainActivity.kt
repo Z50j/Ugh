@@ -13,6 +13,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -28,6 +29,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha // For the alpha modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -42,6 +44,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.IntOffset // For IntOffset
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bumptech.glide.Glide
@@ -68,6 +71,9 @@ import android.content.ContentValues
 import android.os.Environment
 import android.util.Log
 import kotlin.math.roundToInt
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.scale
+import com.google.accompanist.systemuicontroller.rememberSystemUiController
 
 // ViewModel to manage the state and logic of the Ugh app
 class UghViewModel : ViewModel() {
@@ -94,7 +100,7 @@ class UghViewModel : ViewModel() {
         private set
 
     // MutableState for the number of vertical segments to crop (2, 3, or 4)
-    var cropSegments by mutableStateOf(2)
+    var cropSegments by mutableIntStateOf(3)
 
 
     // MutableState for the list of cropped bitmaps
@@ -106,7 +112,7 @@ class UghViewModel : ViewModel() {
         private set
 
     // MutableState for the current index of the image being processed for anchor point selection
-    var currentAnchorImageIndex by mutableStateOf(0)
+    var currentAnchorImageIndex by mutableIntStateOf(0)
         private set
 
     // MutableState for the generated GIF file URI
@@ -114,15 +120,26 @@ class UghViewModel : ViewModel() {
         private set
 
     // MutableState for the GIF compilation progress (0-100)
-    var gifCompilationProgress by mutableStateOf(0)
+    var gifCompilationProgress by mutableIntStateOf(0)
+        private set
+    // State for the image that will be used as onion skin
+    var onionSkinBitmap: MutableState<Bitmap?> = mutableStateOf(null)
         private set
 
-    /**
-     * Sets the selected image URI, loads, and scales the bitmap.
-     * Transitions the app state to CROP_IMAGE.
-     * @param uri The URI of the selected image.
-     * @param context The application context.
-     */
+    // State for the transparency of the onion skin
+    var onionSkinTransparency: MutableState<Float> = mutableStateOf(0.5f) // Default transparency
+        private set
+
+    // Function to update onion skin transparency
+    fun setOnionSkinTransparency(value: Float) {
+        onionSkinTransparency.value = value
+    }
+
+    // Function to set the onion skin bitmap (e.g., when moving to the next image)
+    fun setNextOnionSkin(bitmap: Bitmap?) {
+        onionSkinBitmap.value = bitmap
+    }
+
     fun setSelectedImageUri(uri: Uri?, context: Context) {
         originalImageUri = uri
         if (uri != null) {
@@ -145,17 +162,6 @@ class UghViewModel : ViewModel() {
         }
     }
 
-    /**
-     * Sets the number of vertical segments for cropping.
-     * @param segments The number of segments (2, 3, or 4).
-     */
-
-    /**
-     * Performs the image cropping based on the selected number of segments.
-     * Initializes anchor points to the center of each cropped image.
-     * Transitions the app state to SELECT_ANCHOR_POINTS.
-     * @param context The application context.
-     */
     fun performCrop(context: Context) {
         val bitmap = scaledBitmap ?: return
         val segments = cropSegments
@@ -213,11 +219,6 @@ class UghViewModel : ViewModel() {
         }
     }
 
-    /**
-     * Compiles the cropped images into a GIF with a "wiggle" effect.
-     * Updates compilation progress and transitions to PREVIEW_GIF or SELECT_IMAGE on error.
-     * @param context The application context.
-     */
     fun compileGif(context: Context) {
         _currentAppState.value = AppState.COMPILING_GIF
         gifCompilationProgress = 0
@@ -233,12 +234,11 @@ class UghViewModel : ViewModel() {
 
                 val frames = generateWiggleFrames()
 
-                for ((index, frameBitmap) in frames.withIndex()) {
-                    gifEncoder.addFrame(frameBitmap)
-                    // Update progress on the main thread
-                    withContext(Dispatchers.Main) {
-                        gifCompilationProgress = ((index + 1).toFloat() / frames.size * 100).roundToInt()
-                    }
+                for (frame in frames) {
+                    gifEncoder.addFrame(frame)
+                }
+                for (i in frames.size - 2 downTo 1) {
+                    gifEncoder.addFrame(frames[i])
                 }
 
                 gifEncoder.finish()
@@ -270,12 +270,6 @@ class UghViewModel : ViewModel() {
             }
         }
     }
-
-    /**
-     * Generates a list of Bitmap frames for the GIF, applying a "wiggle" translation
-     * to each cropped image based on its anchor point.
-     * @return A list of Bitmap frames.
-     */
     private fun generateWiggleFrames(): List<Bitmap> {
         if (croppedBitmaps.isEmpty() || anchorPoints.isEmpty() || croppedBitmaps.size != anchorPoints.size) {
             // Essential check: Ensure you have an anchor point for each cropped bitmap
@@ -295,8 +289,8 @@ class UghViewModel : ViewModel() {
 
         // Calculate the overall average anchor point from the original (cropped bitmap) coordinates.
         // This gives us a conceptual "center" for the anchor points across all slices.
-        val avgAnchorX_relativeToBitmap = anchorPoints.map { it.x }.average().toFloat()
-        val avgAnchorY_relativeToBitmap = anchorPoints.map { it.y }.average().toFloat()
+        val avgAnchorXrelativeToBitmap = anchorPoints.map { it.x }.average().toFloat()
+        val avgAnchorYrelativeToBitmap = anchorPoints.map { it.y }.average().toFloat()
 
 
         // Iterate through cropped bitmaps to find the bounds needed if aligned
@@ -305,8 +299,8 @@ class UghViewModel : ViewModel() {
             val anchor = anchorPoints[i]
 
             // Calculate the draw position for this bitmap if its anchor were at (avgAnchorX_relativeToBitmap, avgAnchorY_relativeToBitmap)
-            val currentDrawX = avgAnchorX_relativeToBitmap - anchor.x
-            val currentDrawY = avgAnchorY_relativeToBitmap - anchor.y
+            val currentDrawX = avgAnchorXrelativeToBitmap - anchor.x
+            val currentDrawY = avgAnchorYrelativeToBitmap - anchor.y
 
             // Update global min/max bounds based on where this bitmap's corners would land
             minCalculatedX = minOf(minCalculatedX, currentDrawX)
@@ -353,7 +347,7 @@ class UghViewModel : ViewModel() {
             val currentOverallWiggleOffset = overallWiggleOffsets[i % overallWiggleOffsets.size]
 
             // Create a new blank Bitmap for this single frame of the GIF.
-            val frameBitmap = Bitmap.createBitmap(gifFrameWidth, gifFrameHeight, Bitmap.Config.ARGB_8888) // Use ARGB_8888 for transparency
+            val frameBitmap = createBitmap(gifFrameWidth, gifFrameHeight) // Use ARGB_8888 for transparency
             val canvas = Canvas(frameBitmap)
             canvas.drawColor(android.graphics.Color.TRANSPARENT) // Transparent background
 
@@ -361,8 +355,8 @@ class UghViewModel : ViewModel() {
             // a) Position the bitmap so its anchor point aligns with the 'avgAnchorX_relativeToBitmap' (our target alignment point).
             // b) Apply the `globalShiftX/Y` to center the whole aligned content within the `gifFrameWidth/Height`.
             // c) Apply the `currentOverallWiggleOffset` to introduce the overall wiggle effect.
-            val drawX = (avgAnchorX_relativeToBitmap - currentAnchor.x) + globalShiftX + currentOverallWiggleOffset.x
-            val drawY = (avgAnchorY_relativeToBitmap - currentAnchor.y) + globalShiftY + currentOverallWiggleOffset.y
+            val drawX = (avgAnchorXrelativeToBitmap - currentAnchor.x) + globalShiftX + currentOverallWiggleOffset.x
+            val drawY = (avgAnchorYrelativeToBitmap - currentAnchor.y) + globalShiftY + currentOverallWiggleOffset.y
 
             // Draw the current cropped bitmap (which is ONE vertical slice/frame) onto the new frame
             canvas.drawBitmap(currentBitmap, drawX, drawY, null)
@@ -456,7 +450,7 @@ class UghViewModel : ViewModel() {
 
         val aspectRatio = bitmap.width.toFloat() / bitmap.height.toFloat()
         val newWidth = (maxHeight * aspectRatio).roundToInt()
-        return Bitmap.createScaledBitmap(bitmap, newWidth, maxHeight, true)
+        return bitmap.scale(newWidth, maxHeight)
     }
 }
 
@@ -468,6 +462,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         setContent {
             // Apply the UghTheme (which includes MaterialTheme and dark theme support)
             UghTheme {
@@ -519,6 +514,18 @@ fun UghApp(viewModel: UghViewModel) {
         }
     }
 
+    // New LaunchedEffect to handle the onion skin logic
+    LaunchedEffect(viewModel.currentAnchorImageIndex) {
+        val currentImageIndex = viewModel.currentAnchorImageIndex
+        if (currentImageIndex > 0 && currentImageIndex < viewModel.croppedBitmaps.size) {
+            // If it's not the first image, set the previous image as the onion skin
+            viewModel.setNextOnionSkin(viewModel.croppedBitmaps[currentImageIndex - 1])
+        } else {
+            // If it's the first image, there is no onion skin
+            viewModel.setNextOnionSkin(null)
+        }
+    }
+
     // Display different screens based on the current application state
     when (appState) {
         UghViewModel.AppState.SELECT_IMAGE -> {
@@ -548,12 +555,18 @@ fun UghApp(viewModel: UghViewModel) {
             // Ensure there's a cropped image at the current index
             if (currentImageIndex < viewModel.croppedBitmaps.size) {
                 AnchorPointSelectionScreen(
+                    // Pass the current cropped bitmap from the ViewModel's list
                     bitmap = viewModel.croppedBitmaps[currentImageIndex],
+                    // Pass the current anchor point from the ViewModel's list
                     initialAnchorPoint = viewModel.anchorPoints[currentImageIndex],
                     onAnchorPointChanged = { offset -> viewModel.updateCurrentAnchorPoint(offset) },
                     onConfirmAnchorPoint = { viewModel.confirmAnchorPoint(context) },
-                    imageIndex = currentImageIndex + 1, // Display 1-based index to user
-                    totalImages = viewModel.croppedBitmaps.size
+                    imageIndex = currentImageIndex + 1, // Display 1-based index
+                    totalImages = viewModel.croppedBitmaps.size,
+                    onionSkinBitmap = viewModel.onionSkinBitmap.value,
+                    onionSkinAnchorPoint = viewModel.anchorPoints.getOrNull(currentImageIndex - 1),
+                    onTransparencyChanged = { value -> viewModel.setOnionSkinTransparency(value) },
+                    transparency = viewModel.onionSkinTransparency.value
                 )
             } else {
                 // Fallback for unexpected state
@@ -605,7 +618,7 @@ fun ImageSelectionScreen(onImageSelected: (Uri?) -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "Ugh: Wigglegram Creator",
+            text = "Wigglegram Creator",
             style = MaterialTheme.typography.headlineLarge,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(bottom = 32.dp)
@@ -628,7 +641,7 @@ fun ImageSelectionScreen(onImageSelected: (Uri?) -> Unit) {
                 modifier = Modifier.size(32.dp)
             )
             Spacer(Modifier.width(8.dp))
-            Text("Upload 1 Image", fontSize = 20.sp)
+            Text("Upload Image", fontSize = 20.sp)
         }
     }
 }
@@ -668,7 +681,7 @@ fun ImageCropScreen(
                 .fillMaxWidth()
                 .aspectRatio(imageBitmap.width.toFloat() / imageBitmap.height.toFloat())
                 .clip(RoundedCornerShape(8.dp))
-                .background(Color.LightGray)
+                .background(Color.DarkGray)
                 .onGloballyPositioned { coordinates ->
                     imageSize = coordinates.size
                 }
@@ -708,18 +721,22 @@ fun ImageCropScreen(
             text = "Crop into vertical segments:",
             style = MaterialTheme.typography.titleMedium
         )
-        // Radio buttons for selecting crop segments
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
             listOf(2, 3, 4).forEach { segments ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(
-                        selected = selectedSegments == segments,
-                        onClick = { onSegmentsSelected(segments) }
-                    )
+                Button(
+                    onClick = { onSegmentsSelected(segments) },
+                    // Optional: Customize the button's appearance based on selection state
+                    colors = if (selectedSegments == segments) {
+                        ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    } else {
+                        ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+                    },
+                    modifier = Modifier.padding(4.dp)
+                ) {
                     Text("$segments segments")
                 }
             }
@@ -739,7 +756,72 @@ fun ImageCropScreen(
         }
     }
 }
+@Composable
+fun InitialScreen(onStart: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Button(onClick = onStart) {
+            Text("Show First Segment")
+        }
+    }
+}
+@Composable
+fun GifAnchorPointSetter(
+    gifBitmaps: List<Bitmap>,
+    onComplete: (List<Offset>) -> Unit // Callback when all anchor points are set
+) {
+    var currentImageIndex by remember { mutableStateOf(-1) } // -1 for initial state
+    var currentDragAnchorPoint by remember { mutableStateOf(Offset.Zero) }
+    val anchorPoints = remember { mutableStateListOf<Offset>() }
+    var transparency by remember { mutableStateOf(1f) } // Add state for transparency
 
+    when (currentImageIndex) {
+        -1 -> {
+            // Initial screen with "Show First Segment" button
+            InitialScreen {
+                currentImageIndex = 0
+            }
+        }
+        in 0 until gifBitmaps.size -> {
+            // Screen for selecting an anchor point for the current image
+            AnchorPointSelectionScreen(
+                bitmap = gifBitmaps[currentImageIndex],
+                initialAnchorPoint = anchorPoints.getOrNull(currentImageIndex) ?: Offset.Zero,
+                onionSkinBitmap = gifBitmaps.getOrNull(currentImageIndex - 1),
+                onionSkinAnchorPoint = anchorPoints.getOrNull(currentImageIndex - 1),
+                onAnchorPointChanged = { newAnchorPoint ->
+                    currentDragAnchorPoint = newAnchorPoint
+                },
+                onTransparencyChanged = { newTransparency ->
+                    transparency = newTransparency
+                },
+                transparency = transparency,
+                onConfirmAnchorPoint = {
+                    // This lambda takes no arguments, matching the function signature
+                    val confirmedAnchorPoint = currentDragAnchorPoint
+                    if (currentImageIndex < anchorPoints.size) {
+                        anchorPoints[currentImageIndex] = confirmedAnchorPoint
+                    } else {
+                        anchorPoints.add(confirmedAnchorPoint)
+                    }
+
+                    if (currentImageIndex == gifBitmaps.size - 1) {
+                        // All done, complete the process
+                        onComplete(anchorPoints)
+                    } else {
+                        // Move to the next image
+                        currentImageIndex++
+                    }
+                },
+                imageIndex = currentImageIndex + 1,
+                totalImages = gifBitmaps.size
+            )
+        }
+    }
+}
 @Composable
 fun AnchorPointSelectionScreen(
     bitmap: Bitmap,
@@ -747,105 +829,157 @@ fun AnchorPointSelectionScreen(
     onAnchorPointChanged: (Offset) -> Unit,
     onConfirmAnchorPoint: () -> Unit,
     imageIndex: Int,
-    totalImages: Int
+    totalImages: Int,
+    onionSkinBitmap: Bitmap?,
+    onionSkinAnchorPoint: Offset?,
+    onTransparencyChanged: (Float) -> Unit,
+    transparency: Float,
 ) {
     val imageBitmap = remember(bitmap) { bitmap.asImageBitmap() }
-    // Mutable state for the current position of the draggable anchor point
-    var currentAnchorPoint by remember { mutableStateOf(initialAnchorPoint) }
-    // State to hold the size of the image Composable on screen
+    val onionSkinImageBitmap = remember(onionSkinBitmap) { onionSkinBitmap?.asImageBitmap() }
+
+    var currentImageOffset by remember { mutableStateOf(Offset.Zero) }
     var imageSize by remember { mutableStateOf(IntSize.Zero) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceAround
-    ) {
-        Text(
-            text = "Select Anchor Point for Image $imageIndex of $totalImages",
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
+    val fixedAnchorPoint = remember(imageSize) {
+        if (imageSize != IntSize.Zero) {
+            Offset(imageSize.width / 2f, imageSize.height / 2f)
+        } else {
+            Offset.Zero
+        }
+    }
 
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(imageBitmap.width.toFloat() / imageBitmap.height.toFloat())
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color.DarkGray)
-                .onGloballyPositioned { coordinates ->
-                    imageSize = coordinates.size
-                    // Initialize anchor point to the center of the image if it's still at (0,0)
-                    // This ensures the crosshair starts in a sensible default position.
-                    if (initialAnchorPoint == Offset(0f, 0f) && imageSize != IntSize.Zero) {
-                        currentAnchorPoint = Offset(imageSize.width / 2f, imageSize.height / 2f)
-                        onAnchorPointChanged(currentAnchorPoint)
-                    }
+    val absoluteAnchorPoint = remember(fixedAnchorPoint, currentImageOffset) {
+        fixedAnchorPoint - currentImageOffset
+    }
+
+    Scaffold(
+        bottomBar = {
+            // This content will be pinned to the bottom of the screen
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp) // Apply padding to the bottom bar itself
+            ) {
+                // Only show the slider if there's an onion skin
+                if (onionSkinBitmap != null) {
+                    Text(
+                        text = "Onion Skin Transparency",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Slider(
+                        value = transparency,
+                        onValueChange = onTransparencyChanged,
+                        valueRange = 0f..1f,
+                        modifier = Modifier.fillMaxWidth(0.8f)
+                    )
+                    Spacer(Modifier.height(16.dp))
                 }
-                .pointerInput(Unit) { // Use pointerInput for drag gestures
-                    detectDragGestures { change, dragAmount ->
-                        change.consume() // Consume the event to prevent propagation
-                        // Calculate new anchor point position, clamping within image bounds
-                        val newX = (currentAnchorPoint.x + dragAmount.x).coerceIn(0f, imageSize.width.toFloat())
-                        val newY = (currentAnchorPoint.y + dragAmount.y).coerceIn(0f, imageSize.height.toFloat())
-                        currentAnchorPoint = Offset(newX, newY)
-                        onAnchorPointChanged(currentAnchorPoint) // Notify ViewModel of change
-                    }
+
+                Button(
+                    onClick = onConfirmAnchorPoint,
+                    modifier = Modifier
+                        .fillMaxWidth(0.6f)
+                        .height(50.dp)
+                        .clip(RoundedCornerShape(12.dp)),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                ) {
+                    Text("Confirm Anchor Point", fontSize = 18.sp)
                 }
-        ) {
-            Image(
-                bitmap = imageBitmap,
-                contentDescription = "Cropped Image $imageIndex",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Fit
-            )
-
-            // Magnifying crosshair overlay drawn on Canvas
-            androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-                val crosshairSize = 30.dp.toPx() // Size of the crosshair lines
-                val strokeWidth = 2.dp.toPx() // Thickness of the lines
-                val crosshairColor = Color.Yellow // Color of the crosshair
-
-                // Horizontal line of the crosshair
-                drawLine(
-                    color = crosshairColor,
-                    start = Offset(currentAnchorPoint.x - crosshairSize / 2, currentAnchorPoint.y),
-                    end = Offset(currentAnchorPoint.x + crosshairSize / 2, currentAnchorPoint.y),
-                    strokeWidth = strokeWidth
-                )
-                // Vertical line of the crosshair
-                drawLine(
-                    color = crosshairColor,
-                    start = Offset(currentAnchorPoint.x, currentAnchorPoint.y - crosshairSize / 2),
-                    end = Offset(currentAnchorPoint.x, currentAnchorPoint.y + crosshairSize / 2),
-                    strokeWidth = strokeWidth
-                )
-                // Circle for the "magnifying" effect
-                drawCircle(
-                    color = crosshairColor,
-                    radius = crosshairSize / 2,
-                    center = currentAnchorPoint,
-                    style = Stroke(width = strokeWidth) // Draw only the outline
-                )
             }
         }
-
-        Spacer(Modifier.height(16.dp))
-
-        Button(
-            onClick = onConfirmAnchorPoint,
+    ) { innerPadding ->
+        // This is the main content area of the screen
+        Column(
             modifier = Modifier
-                .fillMaxWidth(0.6f)
-                .height(50.dp)
-                .clip(RoundedCornerShape(12.dp)),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                .fillMaxSize()
+                .padding(innerPadding) // Crucial: Apply the padding from Scaffold
+                .padding(horizontal = 16.dp), // Add horizontal padding for a clean look
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text("Confirm Anchor Point", fontSize = 18.sp)
+            Text(
+                text = "Align Anchor Point for Image $imageIndex of $totalImages",
+                style = MaterialTheme.typography.headlineMedium,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(imageBitmap.width.toFloat() / imageBitmap.height.toFloat())
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color.DarkGray)
+                    .onGloballyPositioned { coordinates ->
+                        imageSize = coordinates.size
+                    }
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            currentImageOffset += dragAmount
+                            onAnchorPointChanged(fixedAnchorPoint - currentImageOffset)
+                        }
+                    }
+            ) {
+
+                // 1. First, draw the previous image at full opacity.
+                // This is now the "solid" background for alignment.
+                if (onionSkinImageBitmap != null && onionSkinAnchorPoint != null) {
+                    Image(
+                        bitmap = onionSkinImageBitmap,
+                        contentDescription = "Previous Image (Onion Skin)",
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .offset {
+                                // Calculate the offset to align the previous image's anchor point
+                                // with the fixed crosshair at the center of the box.
+                                val xOffset = imageSize.width / 2f - onionSkinAnchorPoint.x
+                                val yOffset = imageSize.height / 2f - onionSkinAnchorPoint.y
+                                IntOffset(xOffset.roundToInt(), yOffset.roundToInt())
+                            },
+                        contentScale = ContentScale.Fit
+                    )
+                }
+
+                // 2. Next, draw the current draggable image.
+                // This image is what the user controls and its transparency is adjustable.
+                Image(
+                    bitmap = imageBitmap,
+                    contentDescription = "Current Image $imageIndex",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .offset {
+                            IntOffset(
+                                currentImageOffset.x.roundToInt(),
+                                currentImageOffset.y.roundToInt()
+                            )
+                        }
+                        .alpha(transparency), // <-- Transparency is now on the current image
+                    contentScale = ContentScale.Fit
+                )
+
+                // 3. The fixed Red Crosshair is drawn on top of everything.
+                androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                    val crosshairSize = 30.dp.toPx()
+                    val strokeWidth = 2.dp.toPx()
+                    val crosshairColor = Color.Red
+                    drawLine(
+                        color = crosshairColor,
+                        start = Offset(fixedAnchorPoint.x - crosshairSize / 2, fixedAnchorPoint.y),
+                        end = Offset(fixedAnchorPoint.x + crosshairSize / 2, fixedAnchorPoint.y),
+                        strokeWidth = strokeWidth
+                    )
+                    drawLine(
+                        color = crosshairColor,
+                        start = Offset(fixedAnchorPoint.x, fixedAnchorPoint.y - crosshairSize / 2),
+                        end = Offset(fixedAnchorPoint.x, fixedAnchorPoint.y + crosshairSize / 2),
+                        strokeWidth = strokeWidth
+                    )
+                }
+            }
         }
     }
 }
-
 @Composable
 fun GifCompilationScreen(progress: Int) {
     Column(
@@ -862,7 +996,7 @@ fun GifCompilationScreen(progress: Int) {
         )
         // Linear progress indicator
         LinearProgressIndicator(
-            progress = progress / 100f, // Convert 0-100 to 0.0-1.0
+            progress = { progress / 100f }, // Correct syntax for Material3
             modifier = Modifier
                 .fillMaxWidth(0.8f) // 80% of screen width
                 .height(12.dp)
@@ -878,11 +1012,6 @@ fun GifCompilationScreen(progress: Int) {
     }
 }
 
-/**
- * Composable screen for previewing the generated GIF and providing save/start over options.
- * @param gifUri The URI of the generated GIF file.
- * @param onStartOver Callback to restart the application flow.
- */
 @Composable
 fun GifPreviewScreen(
     gifUri: Uri,
@@ -907,7 +1036,7 @@ fun GifPreviewScreen(
         AndroidView(
             factory = { ctx ->
                 android.widget.ImageView(ctx).apply {
-                    setBackgroundColor(android.graphics.Color.LTGRAY)
+                    setBackgroundColor(android.graphics.Color.BLACK)
                     scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
                 }
             },
@@ -992,7 +1121,7 @@ fun GifPreviewScreen(
                 .height(50.dp)
                 .clip(RoundedCornerShape(12.dp)),
             colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary),
-            border = ButtonDefaults.outlinedButtonBorder
+            border = ButtonDefaults.outlinedButtonBorder(enabled = true)
         ) {
             Text("Start Over", fontSize = 18.sp)
         }
