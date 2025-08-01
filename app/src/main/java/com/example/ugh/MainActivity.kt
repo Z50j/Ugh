@@ -655,96 +655,106 @@ fun ImageCropScreen(
     val imageBitmap = remember(bitmap) { bitmap.asImageBitmap() }
     var imageSize by remember { mutableStateOf(IntSize.Zero) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceAround
-    ) {
-        Text(
-            text = "Crop Image",
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(imageBitmap.width.toFloat() / imageBitmap.height.toFloat())
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color.DarkGray)
-                .onGloballyPositioned { coordinates ->
-                    imageSize = coordinates.size
+    Scaffold(
+        bottomBar = {
+            // This content will be pinned to the bottom of the screen
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp) // Apply padding to the bottom bar itself
+            ) {
+                Button(
+                    onClick = onConfirmCrop,
+                    modifier = Modifier
+                        .fillMaxWidth(0.6f)
+                        .height(50.dp)
+                        .clip(RoundedCornerShape(12.dp)),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                ) {
+                    Text("Confirm Crop", fontSize = 18.sp)
                 }
+            }
+        }
+    ) { innerPadding ->
+        // This is the main content area of the screen
+        Column(
+            modifier = Modifier
+                .fillMaxSize() // Fill the available space, considering Scaffold's padding
+                .padding(innerPadding) // Crucial: Apply the padding from Scaffold
+                .padding(horizontal = 16.dp), // Add horizontal padding for a clean look
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Top // Align content to the top
         ) {
-            Image(
-                bitmap = imageBitmap,
-                contentDescription = "Selected Image",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Fit
+            Text(
+                text = "Crop Image",
+                style = MaterialTheme.typography.headlineMedium,
+                modifier = Modifier.padding(bottom = 16.dp)
             )
 
-            // Overlay lines for cropping preview - MODIFIED FOR VERTICAL CROPPING
-            androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-                val numLines = selectedSegments - 1
-                if (numLines > 0) {
-                    // Calculate width for vertical segments
-                    val segmentWidthPx = imageSize.width.toFloat() / selectedSegments
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f) // This is the key: make the image box take up available space
+                    .aspectRatio(imageBitmap.width.toFloat() / imageBitmap.height.toFloat())
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color.DarkGray)
+                    .onGloballyPositioned { coordinates ->
+                        imageSize = coordinates.size
+                    }
+            ) {
+                Image(
+                    bitmap = imageBitmap,
+                    contentDescription = "Selected Image",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit
+                )
 
-                    for (i in 1..numLines) {
-                        val x = i * segmentWidthPx // Calculate X coordinate for vertical lines
-                        drawLine(
-                            color = Color.Red, // Red lines for visibility
-                            start = Offset(x, 0f), // Line starts at (x, 0)
-                            end = Offset(x, size.height), // Line ends at (x, height)
-                            strokeWidth = 2.dp.toPx(), // 2dp thick lines
-                            alpha = 0.7f // Slightly transparent
-                        )
+                // Overlay lines for cropping preview
+                androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                    val numLines = selectedSegments - 1
+                    if (numLines > 0) {
+                        val segmentWidthPx = imageSize.width.toFloat() / selectedSegments
+
+                        for (i in 1..numLines) {
+                            val x = i * segmentWidthPx
+                            drawLine(
+                                color = Color.Red,
+                                start = Offset(x, 0f),
+                                end = Offset(x, size.height),
+                                strokeWidth = 2.dp.toPx(),
+                                alpha = 0.7f
+                            )
+                        }
                     }
                 }
             }
-        }
 
-        Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(16.dp))
 
-        Text(
-            // Changed text to reflect vertical cropping intention
-            text = "Crop into vertical segments:",
-            style = MaterialTheme.typography.titleMedium
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            listOf(2, 3, 4).forEach { segments ->
-                Button(
-                    onClick = { onSegmentsSelected(segments) },
-                    // Optional: Customize the button's appearance based on selection state
-                    colors = if (selectedSegments == segments) {
-                        ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                    } else {
-                        ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
-                    },
-                    modifier = Modifier.padding(4.dp)
-                ) {
-                    Text("$segments segments")
+            Text(
+                text = "Crop into vertical segments:",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                listOf(2, 3, 4).forEach { segments ->
+                    Button(
+                        onClick = { onSegmentsSelected(segments) },
+                        colors = if (selectedSegments == segments) {
+                            ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                        } else {
+                            ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+                        },
+                        modifier = Modifier.padding(4.dp)
+                    ) {
+                        Text("$segments segments")
+                    }
                 }
             }
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        Button(
-            onClick = onConfirmCrop,
-            modifier = Modifier
-                .fillMaxWidth(0.6f)
-                .height(50.dp)
-                .clip(RoundedCornerShape(12.dp)),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-        ) {
-            Text("Confirm Crop", fontSize = 18.sp)
         }
     }
 }
@@ -767,7 +777,8 @@ fun AnchorPointSelectionScreen(
     var currentImageOffset by remember { mutableStateOf(Offset.Zero) }
     var imageSize by remember { mutableStateOf(IntSize.Zero) }
 
-    val fixedAnchorPoint = remember(imageSize) {
+    // This is the fixed center of the display box where the crosshair is.
+    val displayCrosshairCenter = remember(imageSize) {
         if (imageSize != IntSize.Zero) {
             Offset(imageSize.width / 2f, imageSize.height / 2f)
         } else {
@@ -777,14 +788,12 @@ fun AnchorPointSelectionScreen(
 
     Scaffold(
         bottomBar = {
-            // This content will be pinned to the bottom of the screen
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp) // Apply padding to the bottom bar itself
+                    .padding(16.dp)
             ) {
-                // Only show the slider if there's an onion skin
                 if (onionSkinBitmap != null) {
                     Text(
                         text = "Onion Skin Transparency",
@@ -812,12 +821,11 @@ fun AnchorPointSelectionScreen(
             }
         }
     ) { innerPadding ->
-        // This is the main content area of the screen
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding) // Crucial: Apply the padding from Scaffold
-                .padding(horizontal = 16.dp), // Add horizontal padding for a clean look
+                .padding(innerPadding)
+                .padding(horizontal = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
@@ -839,13 +847,17 @@ fun AnchorPointSelectionScreen(
                         detectDragGestures { change, dragAmount ->
                             change.consume()
                             currentImageOffset += dragAmount
-                            onAnchorPointChanged(fixedAnchorPoint - currentImageOffset)
+
+                            // Calculate the anchor point relative to the TOP-LEFT of the image.
+                            // The crosshair is at displayCrosshairCenter.
+                            // The image's current top-left is at currentImageOffset.
+                            // So, the anchor point *on the image itself* is:
+                            val anchorPointOnImage = displayCrosshairCenter - currentImageOffset
+                            onAnchorPointChanged(anchorPointOnImage)
                         }
                     }
             ) {
 
-                // 1. First, draw the previous image at full opacity.
-                // This is now the "solid" background for alignment.
                 if (onionSkinImageBitmap != null && onionSkinAnchorPoint != null) {
                     Image(
                         bitmap = onionSkinImageBitmap,
@@ -853,18 +865,17 @@ fun AnchorPointSelectionScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .offset {
-                                // Calculate the offset to align the previous image's anchor point
-                                // with the fixed crosshair at the center of the box.
-                                val xOffset = imageSize.width / 2f - onionSkinAnchorPoint.x
-                                val yOffset = imageSize.height / 2f - onionSkinAnchorPoint.y
+                                // To align the onion skin's anchor point with the crosshair:
+                                // The onion skin image needs to be shifted so that its
+                                // onionSkinAnchorPoint aligns with displayCrosshairCenter.
+                                val xOffset = displayCrosshairCenter.x - onionSkinAnchorPoint.x
+                                val yOffset = displayCrosshairCenter.y - onionSkinAnchorPoint.y
                                 IntOffset(xOffset.roundToInt(), yOffset.roundToInt())
                             },
                         contentScale = ContentScale.Fit
                     )
                 }
 
-                // 2. Next, draw the current draggable image.
-                // This image is what the user controls and its transparency is adjustable.
                 Image(
                     bitmap = imageBitmap,
                     contentDescription = "Current Image $imageIndex",
@@ -876,25 +887,25 @@ fun AnchorPointSelectionScreen(
                                 currentImageOffset.y.roundToInt()
                             )
                         }
-                        .alpha(transparency), // <-- Transparency is now on the current image
+                        .alpha(transparency),
                     contentScale = ContentScale.Fit
                 )
 
-                // 3. The fixed Red Crosshair is drawn on top of everything.
+                // The fixed Red Crosshair is drawn on top of everything.
                 androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
                     val crosshairSize = 30.dp.toPx()
                     val strokeWidth = 2.dp.toPx()
                     val crosshairColor = Color.Red
                     drawLine(
                         color = crosshairColor,
-                        start = Offset(fixedAnchorPoint.x - crosshairSize / 2, fixedAnchorPoint.y),
-                        end = Offset(fixedAnchorPoint.x + crosshairSize / 2, fixedAnchorPoint.y),
+                        start = Offset(displayCrosshairCenter.x - crosshairSize / 2, displayCrosshairCenter.y),
+                        end = Offset(displayCrosshairCenter.x + crosshairSize / 2, displayCrosshairCenter.y),
                         strokeWidth = strokeWidth
                     )
                     drawLine(
                         color = crosshairColor,
-                        start = Offset(fixedAnchorPoint.x, fixedAnchorPoint.y - crosshairSize / 2),
-                        end = Offset(fixedAnchorPoint.x, fixedAnchorPoint.y + crosshairSize / 2),
+                        start = Offset(displayCrosshairCenter.x, displayCrosshairCenter.y - crosshairSize / 2),
+                        end = Offset(displayCrosshairCenter.x, displayCrosshairCenter.y + crosshairSize / 2),
                         strokeWidth = strokeWidth
                     )
                 }
