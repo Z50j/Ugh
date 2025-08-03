@@ -1,6 +1,7 @@
 package com.example.ugh
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -17,7 +18,6 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,7 +36,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.IntSize
@@ -46,8 +45,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bumptech.glide.Glide
 import com.bumptech.glide.gifencoder.AnimatedGifEncoder
-import com.bumptech.glide.load.engine.bitmap_recycle.BitmapPool
-import com.bumptech.glide.load.engine.bitmap_recycle.LruBitmapPool
 import com.example.ugh.ui.theme.UghTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -67,7 +64,8 @@ import android.provider.MediaStore
 import android.content.ContentValues
 import android.os.Environment
 import android.util.Log
-import kotlin.math.roundToInt
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.scale
 
 // ViewModel to manage the state and logic of the Ugh app
 class UghViewModel : ViewModel() {
@@ -94,7 +92,7 @@ class UghViewModel : ViewModel() {
         private set
 
     // MutableState for the number of vertical segments to crop (2, 3, or 4)
-    var cropSegments by mutableStateOf(2)
+    var cropSegments by mutableIntStateOf(2)
 
 
     // MutableState for the list of cropped bitmaps
@@ -106,7 +104,7 @@ class UghViewModel : ViewModel() {
         private set
 
     // MutableState for the current index of the image being processed for anchor point selection
-    var currentAnchorImageIndex by mutableStateOf(0)
+    var currentAnchorImageIndex by mutableIntStateOf(0)
         private set
 
     // MutableState for the generated GIF file URI
@@ -114,7 +112,7 @@ class UghViewModel : ViewModel() {
         private set
 
     // MutableState for the GIF compilation progress (0-100)
-    var gifCompilationProgress by mutableStateOf(0)
+    var gifCompilationProgress by mutableIntStateOf(0)
         private set
 
     /**
@@ -145,18 +143,7 @@ class UghViewModel : ViewModel() {
         }
     }
 
-    /**
-     * Sets the number of vertical segments for cropping.
-     * @param segments The number of segments (2, 3, or 4).
-     */
-
-    /**
-     * Performs the image cropping based on the selected number of segments.
-     * Initializes anchor points to the center of each cropped image.
-     * Transitions the app state to SELECT_ANCHOR_POINTS.
-     * @param context The application context.
-     */
-    fun performCrop(context: Context) {
+    fun performCrop() {
         val bitmap = scaledBitmap ?: return
         val segments = cropSegments
         val croppedList = mutableListOf<Bitmap>()
@@ -225,7 +212,6 @@ class UghViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val outputStream = ByteArrayOutputStream()
-                val bitmapPool: BitmapPool = LruBitmapPool(1024 * 1024 * 10) // 10MB bitmap pool for Glide
                 val gifEncoder = AnimatedGifEncoder()
                 gifEncoder.start(outputStream)
                 gifEncoder.setDelay(100) // 100ms frame delay
@@ -276,6 +262,7 @@ class UghViewModel : ViewModel() {
      * to each cropped image based on its anchor point.
      * @return A list of Bitmap frames.
      */
+    @SuppressLint("UseKtx")
     private fun generateWiggleFrames(): List<Bitmap> {
         if (croppedBitmaps.isEmpty() || anchorPoints.isEmpty() || croppedBitmaps.size != anchorPoints.size) {
             // Essential check: Ensure you have an anchor point for each cropped bitmap
@@ -295,8 +282,8 @@ class UghViewModel : ViewModel() {
 
         // Calculate the overall average anchor point from the original (cropped bitmap) coordinates.
         // This gives us a conceptual "center" for the anchor points across all slices.
-        val avgAnchorX_relativeToBitmap = anchorPoints.map { it.x }.average().toFloat()
-        val avgAnchorY_relativeToBitmap = anchorPoints.map { it.y }.average().toFloat()
+        val avgAnchorXrelativeToBitmap = anchorPoints.map { it.x }.average().toFloat()
+        val avgAnchorYrelativeToBitmap = anchorPoints.map { it.y }.average().toFloat()
 
 
         // Iterate through cropped bitmaps to find the bounds needed if aligned
@@ -304,9 +291,9 @@ class UghViewModel : ViewModel() {
             val bitmap = croppedBitmaps[i]
             val anchor = anchorPoints[i]
 
-            // Calculate the draw position for this bitmap if its anchor were at (avgAnchorX_relativeToBitmap, avgAnchorY_relativeToBitmap)
-            val currentDrawX = avgAnchorX_relativeToBitmap - anchor.x
-            val currentDrawY = avgAnchorY_relativeToBitmap - anchor.y
+            // Calculate the draw position for this bitmap if its anchor were at (avgAnchorXrelativeToBitmap, avgAnchorYrelativeToBitmap)
+            val currentDrawX = avgAnchorXrelativeToBitmap - anchor.x
+            val currentDrawY = avgAnchorYrelativeToBitmap - anchor.y
 
             // Update global min/max bounds based on where this bitmap's corners would land
             minCalculatedX = minOf(minCalculatedX, currentDrawX)
@@ -353,16 +340,16 @@ class UghViewModel : ViewModel() {
             val currentOverallWiggleOffset = overallWiggleOffsets[i % overallWiggleOffsets.size]
 
             // Create a new blank Bitmap for this single frame of the GIF.
-            val frameBitmap = Bitmap.createBitmap(gifFrameWidth, gifFrameHeight, Bitmap.Config.ARGB_8888) // Use ARGB_8888 for transparency
+            val frameBitmap = createBitmap(gifFrameWidth, gifFrameHeight) // Use ARGB_8888 for transparency
             val canvas = Canvas(frameBitmap)
             canvas.drawColor(android.graphics.Color.TRANSPARENT) // Transparent background
 
             // Calculate the draw position for the 'currentBitmap' on this 'frameBitmap':
-            // a) Position the bitmap so its anchor point aligns with the 'avgAnchorX_relativeToBitmap' (our target alignment point).
+            // a) Position the bitmap so its anchor point aligns with the 'avgAnchorXrelativeToBitmap' (our target alignment point).
             // b) Apply the `globalShiftX/Y` to center the whole aligned content within the `gifFrameWidth/Height`.
             // c) Apply the `currentOverallWiggleOffset` to introduce the overall wiggle effect.
-            val drawX = (avgAnchorX_relativeToBitmap - currentAnchor.x) + globalShiftX + currentOverallWiggleOffset.x
-            val drawY = (avgAnchorY_relativeToBitmap - currentAnchor.y) + globalShiftY + currentOverallWiggleOffset.y
+            val drawX = (avgAnchorXrelativeToBitmap - currentAnchor.x) + globalShiftX + currentOverallWiggleOffset.x
+            val drawY = (avgAnchorYrelativeToBitmap - currentAnchor.y) + globalShiftY + currentOverallWiggleOffset.y
 
             // Draw the current cropped bitmap (which is ONE vertical slice/frame) onto the new frame
             canvas.drawBitmap(currentBitmap, drawX, drawY, null)
@@ -449,14 +436,14 @@ class UghViewModel : ViewModel() {
      * @return The scaled Bitmap, or the original if no scaling is needed.
      */
     private fun scaleBitmap(bitmap: Bitmap): Bitmap {
-        val maxHeight = 2160
+        val maxHeight = 1080
         if (bitmap.height <= maxHeight) {
             return bitmap // No scaling needed if already within limits
         }
 
         val aspectRatio = bitmap.width.toFloat() / bitmap.height.toFloat()
         val newWidth = (maxHeight * aspectRatio).roundToInt()
-        return Bitmap.createScaledBitmap(bitmap, newWidth, maxHeight, true)
+        return bitmap.scale(newWidth, maxHeight)
     }
 }
 
@@ -533,7 +520,7 @@ fun UghApp(viewModel: UghViewModel) {
                     bitmap = bitmap,
                     selectedSegments = viewModel.cropSegments,
                     onSegmentsSelected = { segments -> viewModel.cropSegments = segments },
-                    onConfirmCrop = { viewModel.performCrop(context) }
+                    onConfirmCrop = { viewModel.performCrop() }
                 )
             } ?: run {
                 // If bitmap is unexpectedly null, show a toast and restart the flow
