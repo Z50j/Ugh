@@ -31,7 +31,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -54,7 +53,6 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
 import kotlin.math.roundToInt
-import android.media.MediaScannerConnection
 import androidx.activity.viewModels
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -229,8 +227,8 @@ class UghViewModel : ViewModel() {
 
                 gifEncoder.finish()
 
-                // Save the GIF to internal storage
-                val gifFile = saveGifToFile(context, outputStream.toByteArray())
+                // Save the GIF to cache
+                val gifFile = saveGifToCache(context, outputStream.toByteArray())
                 if (gifFile != null) {
                     gifUri = Uri.fromFile(gifFile)
                     withContext(Dispatchers.Main) {
@@ -371,12 +369,14 @@ class UghViewModel : ViewModel() {
      * @param gifBytes The byte array of the GIF data.
      * @return The File object if successful, null otherwise.
      */
-    private suspend fun saveGifToFile(context: Context, gifBytes: ByteArray): File? {
+    private suspend fun saveGifToCache(context: Context, gifBytes: ByteArray): File? {
         return withContext(Dispatchers.IO) {
-            val directory = File(
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
-                "wigglegrams"
-            )
+            // Get the cache directory for your app.
+            // This is a private directory that the OS manages.
+            val cacheDir = context.cacheDir
+
+            // You can create a subdirectory within the cache for better organization
+            val directory = File(cacheDir, "wigglegrams")
             if (!directory.exists()) {
                 directory.mkdirs() // Create the directory if it doesn't exist
             }
@@ -388,8 +388,7 @@ class UghViewModel : ViewModel() {
                 FileOutputStream(file).use { fos ->
                     fos.write(gifBytes)
                 }
-                // Notify the media scanner about the new file so it appears in the gallery
-                MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), null, null)
+                // No need to notify MediaScanner, as cache files are not meant to be in the gallery
                 file
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -592,7 +591,7 @@ fun ImageSelectionScreen(onImageSelected: (Uri?) -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "Ugh: Wigglegram Creator",
+            text = "Wigglegram Creator",
             style = MaterialTheme.typography.headlineLarge,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(bottom = 32.dp)
@@ -615,7 +614,7 @@ fun ImageSelectionScreen(onImageSelected: (Uri?) -> Unit) {
                 modifier = Modifier.size(32.dp)
             )
             Spacer(Modifier.width(8.dp))
-            Text("Upload 1 Image", fontSize = 20.sp)
+            Text("Upload Image", fontSize = 20.sp)
         }
     }
 }
@@ -695,18 +694,29 @@ fun ImageCropScreen(
             text = "Crop into vertical segments:",
             style = MaterialTheme.typography.titleMedium
         )
-        // Radio buttons for selecting crop segments
+        // Buttons for selecting crop segments
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
             listOf(2, 3, 4).forEach { segments ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(
-                        selected = selectedSegments == segments,
-                        onClick = { onSegmentsSelected(segments) }
+                Button(
+                    onClick = { onSegmentsSelected(segments) },
+                    // Change the button color based on whether it's selected
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (selectedSegments == segments) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        },
+                        contentColor = if (selectedSegments == segments) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
                     )
+                ) {
                     Text("$segments segments")
                 }
             }
@@ -737,98 +747,87 @@ fun AnchorPointSelectionScreen(
     totalImages: Int
 ) {
     val imageBitmap = remember(bitmap) { bitmap.asImageBitmap() }
-    // Mutable state for the current position of the draggable anchor point
     var currentAnchorPoint by remember { mutableStateOf(initialAnchorPoint) }
-    // State to hold the size of the image Composable on screen
     var imageSize by remember { mutableStateOf(IntSize.Zero) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceAround
-    ) {
-        Text(
-            text = "Select Anchor Point for Image $imageIndex of $totalImages",
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(imageBitmap.width.toFloat() / imageBitmap.height.toFloat())
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color.DarkGray)
-                .onGloballyPositioned { coordinates ->
-                    imageSize = coordinates.size
-                    // Initialize anchor point to the center of the image if it's still at (0,0)
-                    // This ensures the crosshair starts in a sensible default position.
-                    if (initialAnchorPoint == Offset(0f, 0f) && imageSize != IntSize.Zero) {
-                        currentAnchorPoint = Offset(imageSize.width / 2f, imageSize.height / 2f)
-                        onAnchorPointChanged(currentAnchorPoint)
-                    }
-                }
-                .pointerInput(Unit) { // Use pointerInput for drag gestures
-                    detectDragGestures { change, dragAmount ->
-                        change.consume() // Consume the event to prevent propagation
-                        // Calculate new anchor point position, clamping within image bounds
-                        val newX = (currentAnchorPoint.x + dragAmount.x).coerceIn(0f, imageSize.width.toFloat())
-                        val newY = (currentAnchorPoint.y + dragAmount.y).coerceIn(0f, imageSize.height.toFloat())
-                        currentAnchorPoint = Offset(newX, newY)
-                        onAnchorPointChanged(currentAnchorPoint) // Notify ViewModel of change
-                    }
-                }
-        ) {
-            Image(
-                bitmap = imageBitmap,
-                contentDescription = "Cropped Image $imageIndex",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Fit
-            )
-
-            // Magnifying crosshair overlay drawn on Canvas
-            androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-                val crosshairSize = 30.dp.toPx() // Size of the crosshair lines
-                val strokeWidth = 2.dp.toPx() // Thickness of the lines
-                val crosshairColor = Color.Yellow // Color of the crosshair
-
-                // Horizontal line of the crosshair
-                drawLine(
-                    color = crosshairColor,
-                    start = Offset(currentAnchorPoint.x - crosshairSize / 2, currentAnchorPoint.y),
-                    end = Offset(currentAnchorPoint.x + crosshairSize / 2, currentAnchorPoint.y),
-                    strokeWidth = strokeWidth
-                )
-                // Vertical line of the crosshair
-                drawLine(
-                    color = crosshairColor,
-                    start = Offset(currentAnchorPoint.x, currentAnchorPoint.y - crosshairSize / 2),
-                    end = Offset(currentAnchorPoint.x, currentAnchorPoint.y + crosshairSize / 2),
-                    strokeWidth = strokeWidth
-                )
-                // Circle for the "magnifying" effect
-                drawCircle(
-                    color = crosshairColor,
-                    radius = crosshairSize / 2,
-                    center = currentAnchorPoint,
-                    style = Stroke(width = strokeWidth) // Draw only the outline
-                )
+    Scaffold(
+        bottomBar = {
+            Button(
+                onClick = onConfirmAnchorPoint,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .clip(RoundedCornerShape(12.dp)),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+            ) {
+                Text("Confirm Anchor Point", fontSize = 18.sp)
             }
         }
-
-        Spacer(Modifier.height(16.dp))
-
-        Button(
-            onClick = onConfirmAnchorPoint,
+    ) { innerPadding ->
+        Column(
             modifier = Modifier
-                .fillMaxWidth(0.6f)
-                .height(50.dp)
-                .clip(RoundedCornerShape(12.dp)),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Top
         ) {
-            Text("Confirm Anchor Point", fontSize = 18.sp)
+            Text(
+                text = "Select Anchor Point for Image $imageIndex of $totalImages",
+                style = MaterialTheme.typography.headlineMedium,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(imageBitmap.width.toFloat() / imageBitmap.height.toFloat())
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color.DarkGray)
+                    .onGloballyPositioned { coordinates ->
+                        imageSize = coordinates.size
+                        if (initialAnchorPoint == Offset(0f, 0f) && imageSize != IntSize.Zero) {
+                            currentAnchorPoint = Offset(imageSize.width / 2f, imageSize.height / 2f)
+                            onAnchorPointChanged(currentAnchorPoint)
+                        }
+                    }
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            val newX = (currentAnchorPoint.x + dragAmount.x).coerceIn(0f, imageSize.width.toFloat())
+                            val newY = (currentAnchorPoint.y + dragAmount.y).coerceIn(0f, imageSize.height.toFloat())
+                            currentAnchorPoint = Offset(newX, newY)
+                            onAnchorPointChanged(currentAnchorPoint)
+                        }
+                    }
+            ) {
+                Image(
+                    bitmap = imageBitmap,
+                    contentDescription = "Cropped Image $imageIndex",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit
+                )
+
+                androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                    val crosshairSize = 30.dp.toPx()
+                    val strokeWidth = 2.dp.toPx()
+                    val crosshairColor = Color.Yellow
+
+                    drawLine(
+                        color = crosshairColor,
+                        start = Offset(currentAnchorPoint.x - crosshairSize / 2, currentAnchorPoint.y),
+                        end = Offset(currentAnchorPoint.x + crosshairSize / 2, currentAnchorPoint.y),
+                        strokeWidth = strokeWidth
+                    )
+                    drawLine(
+                        color = crosshairColor,
+                        start = Offset(currentAnchorPoint.x, currentAnchorPoint.y - crosshairSize / 2),
+                        end = Offset(currentAnchorPoint.x, currentAnchorPoint.y + crosshairSize / 2),
+                        strokeWidth = strokeWidth
+                    )
+                }
+            }
         }
     }
 }
