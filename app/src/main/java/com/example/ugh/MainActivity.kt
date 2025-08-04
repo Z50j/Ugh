@@ -27,6 +27,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -38,6 +39,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
@@ -90,7 +92,7 @@ class UghViewModel : ViewModel() {
         private set
 
     // MutableState for the number of vertical segments to crop (2, 3, or 4)
-    var cropSegments by mutableIntStateOf(2)
+    var cropSegments by mutableIntStateOf(3)
 
 
     // MutableState for the list of cropped bitmaps
@@ -154,7 +156,7 @@ class UghViewModel : ViewModel() {
 
             // Ensure the last segment takes any remaining pixels due to integer division
             // This is crucial for handling cases where bitmap.width is not perfectly divisible by segments
-            val width = if (i == segments - 1) bitmap.width - x else segmentWidth
+            val width = segmentWidth
 
             val cropped = Bitmap.createBitmap(
                 bitmap,
@@ -212,7 +214,7 @@ class UghViewModel : ViewModel() {
                 val outputStream = ByteArrayOutputStream()
                 val gifEncoder = AnimatedGifEncoder()
                 gifEncoder.start(outputStream)
-                gifEncoder.setDelay(100) // 100ms frame delay
+                gifEncoder.setDelay(150) // 150ms frame delay
                 gifEncoder.setRepeat(0) // 0 for infinite loop
 
                 val frames = generateWiggleFrames()
@@ -308,20 +310,7 @@ class UghViewModel : ViewModel() {
         // on the new frame. This centers the content within the derived frame dimensions.
         val globalShiftX = -minCalculatedX
         val globalShiftY = -minCalculatedY
-
-        // --- 2. Define the overall wiggle effect (optional, applied to already aligned frames) ---
-        val wiggleMaxOffsetPx = 10f // Max pixel offset for the overall wiggle effect
-
-        // Sequence of offsets for the overall "wiggle" motion of the entire aligned frame.
-        // This list determines the number of frames in your GIF and their overall shift.
-        // Example for a simple back-and-forth horizontal wiggle:
-        val overallWiggleOffsets = listOf(
-            Offset(0f, 0f), // Center
-            Offset(wiggleMaxOffsetPx, 0f), // Shift right
-            Offset(0f, 0f), // Back to center
-            Offset(-wiggleMaxOffsetPx, 0f), // Shift left
-            Offset(0f, 0f) // Back to center
-        )
+        
         // If you want more frames, or a different pattern, adjust this list.
         // For a smoother wiggle, you might want more intermediate steps.
 
@@ -333,10 +322,6 @@ class UghViewModel : ViewModel() {
             val currentBitmap = croppedBitmaps[i]
             val currentAnchor = anchorPoints[i]
 
-            // Get the specific overall wiggle offset for *this* frame index
-            // Use modulo to cycle through overallWiggleOffsets if you have more croppedBitmaps than wiggle offsets
-            val currentOverallWiggleOffset = overallWiggleOffsets[i % overallWiggleOffsets.size]
-
             // Create a new blank Bitmap for this single frame of the GIF.
             val frameBitmap = createBitmap(gifFrameWidth, gifFrameHeight) // Use ARGB_8888 for transparency
             val canvas = Canvas(frameBitmap)
@@ -345,9 +330,8 @@ class UghViewModel : ViewModel() {
             // Calculate the draw position for the 'currentBitmap' on this 'frameBitmap':
             // a) Position the bitmap so its anchor point aligns with the 'avgAnchorXrelativeToBitmap' (our target alignment point).
             // b) Apply the `globalShiftX/Y` to center the whole aligned content within the `gifFrameWidth/Height`.
-            // c) Apply the `currentOverallWiggleOffset` to introduce the overall wiggle effect.
-            val drawX = (avgAnchorXrelativeToBitmap - currentAnchor.x) + globalShiftX + currentOverallWiggleOffset.x
-            val drawY = (avgAnchorYrelativeToBitmap - currentAnchor.y) + globalShiftY + currentOverallWiggleOffset.y
+            val drawX = (avgAnchorXrelativeToBitmap - currentAnchor.x) + globalShiftX
+            val drawY = (avgAnchorYrelativeToBitmap - currentAnchor.y) + globalShiftY
 
             // Draw the current cropped bitmap (which is ONE vertical slice/frame) onto the new frame
             canvas.drawBitmap(currentBitmap, drawX, drawY, null)
@@ -404,7 +388,7 @@ class UghViewModel : ViewModel() {
         _currentAppState.value = AppState.SELECT_IMAGE
         originalImageUri = null
         scaledBitmap = null
-        cropSegments = 2
+        cropSegments = 3
         croppedBitmaps = emptyList()
         anchorPoints = emptyList()
         currentAnchorImageIndex = 0
@@ -429,7 +413,7 @@ class UghViewModel : ViewModel() {
     }
 
     /**
-     * Helper function to scale a Bitmap to a maximum height of 2160 pixels,
+     * Helper function to scale a Bitmap to a maximum height of 1080 pixels,
      * maintaining its aspect ratio.
      * @param bitmap The original Bitmap to scale.
      * @return The scaled Bitmap, or the original if no scaling is needed.
@@ -531,14 +515,28 @@ fun UghApp(viewModel: UghViewModel) {
         }
         UghViewModel.AppState.SELECT_ANCHOR_POINTS -> {
             val currentImageIndex = viewModel.currentAnchorImageIndex
-            // Ensure there's a cropped image at the current index
             if (currentImageIndex < viewModel.croppedBitmaps.size) {
+                // Determine the previous image and its anchor point
+                val previousBitmap = if (currentImageIndex > 0) {
+                    viewModel.croppedBitmaps[currentImageIndex - 1]
+                } else {
+                    null // No previous image for the first one
+                }
+
+                val previousAnchorPoint = if (currentImageIndex > 0) {
+                    viewModel.anchorPoints[currentImageIndex - 1]
+                } else {
+                    null // No previous anchor point for the first one
+                }
+
                 AnchorPointSelectionScreen(
-                    bitmap = viewModel.croppedBitmaps[currentImageIndex],
+                    currentBitmap = viewModel.croppedBitmaps[currentImageIndex],
+                    previousBitmap = previousBitmap, // Pass the previous image
                     initialAnchorPoint = viewModel.anchorPoints[currentImageIndex],
+                    previousAnchorPoint = previousAnchorPoint, // Pass the previous anchor point
                     onAnchorPointChanged = { offset -> viewModel.updateCurrentAnchorPoint(offset) },
                     onConfirmAnchorPoint = { viewModel.confirmAnchorPoint(context) },
-                    imageIndex = currentImageIndex + 1, // Display 1-based index to user
+                    imageIndex = currentImageIndex + 1,
                     totalImages = viewModel.croppedBitmaps.size
                 )
             } else {
@@ -654,7 +652,7 @@ fun ImageCropScreen(
                 .fillMaxWidth()
                 .aspectRatio(imageBitmap.width.toFloat() / imageBitmap.height.toFloat())
                 .clip(RoundedCornerShape(8.dp))
-                .background(Color.LightGray)
+                .background(Color.Transparent)
                 .onGloballyPositioned { coordinates ->
                     imageSize = coordinates.size
                 }
@@ -739,16 +737,40 @@ fun ImageCropScreen(
 
 @Composable
 fun AnchorPointSelectionScreen(
-    bitmap: Bitmap,
+    currentBitmap: Bitmap,
+    previousBitmap: Bitmap?, // Add the previous bitmap as a parameter
     initialAnchorPoint: Offset,
+    previousAnchorPoint: Offset?, // Add the previous anchor point
     onAnchorPointChanged: (Offset) -> Unit,
     onConfirmAnchorPoint: () -> Unit,
     imageIndex: Int,
     totalImages: Int
 ) {
-    val imageBitmap = remember(bitmap) { bitmap.asImageBitmap() }
-    var currentAnchorPoint by remember { mutableStateOf(initialAnchorPoint) }
-    var imageSize by remember { mutableStateOf(IntSize.Zero) }
+    // We'll track the position of the current image's bitmap using this state
+    var imageOffset by remember { mutableStateOf(Offset.Zero) }
+    var containerSize by remember { mutableStateOf(IntSize.Zero) }
+
+    var renderedImageSize by remember { mutableStateOf(IntSize.Zero) }
+
+    // Convert bitmaps to ImageBitmap for Compose
+    val currentImageBitmap = remember(currentBitmap) { currentBitmap.asImageBitmap() }
+    val previousImageBitmap = remember(previousBitmap) { previousBitmap?.asImageBitmap() }
+
+    // Use LaunchedEffect to initialize the imageOffset correctly
+    LaunchedEffect(containerSize, renderedImageSize) {
+        if (containerSize.width > 0 && renderedImageSize.width > 0) {
+            val scaleX = currentBitmap.width.toFloat() / renderedImageSize.width
+            val scaleY = currentBitmap.height.toFloat() / renderedImageSize.height
+
+            val scaledInitialAnchorX = initialAnchorPoint.x / scaleX
+            val scaledInitialAnchorY = initialAnchorPoint.y / scaleY
+
+            // Calculate the offset needed to center the scaled anchor point
+            val initialX = (containerSize.width / 2f) - scaledInitialAnchorX
+            val initialY = (containerSize.height / 2f) - scaledInitialAnchorY
+            imageOffset = Offset(initialX, initialY)
+        }
+    }
 
     Scaffold(
         bottomBar = {
@@ -768,7 +790,7 @@ fun AnchorPointSelectionScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
+                .padding(innerPadding) // <-- Correctly using the parameter
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Top
@@ -782,48 +804,102 @@ fun AnchorPointSelectionScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(imageBitmap.width.toFloat() / imageBitmap.height.toFloat())
+                    .aspectRatio(currentImageBitmap.width.toFloat() / currentImageBitmap.height.toFloat())
                     .clip(RoundedCornerShape(8.dp))
-                    .background(Color.DarkGray)
+                    .background(Color.Transparent)
                     .onGloballyPositioned { coordinates ->
-                        imageSize = coordinates.size
-                        if (initialAnchorPoint == Offset(0f, 0f) && imageSize != IntSize.Zero) {
-                            currentAnchorPoint = Offset(imageSize.width / 2f, imageSize.height / 2f)
-                            onAnchorPointChanged(currentAnchorPoint)
+                        containerSize = coordinates.size
+                        // Initialize imageOffset for the current image
+                        if (imageOffset == Offset.Zero) {
+                            val initialX = containerSize.width / 2f - initialAnchorPoint.x
+                            val initialY = containerSize.height / 2f - initialAnchorPoint.y
+                            imageOffset = Offset(initialX, initialY)
                         }
-                    }
-                    .pointerInput(Unit) {
-                        detectDragGestures { change, dragAmount ->
-                            change.consume()
-                            val newX = (currentAnchorPoint.x + dragAmount.x).coerceIn(0f, imageSize.width.toFloat())
-                            val newY = (currentAnchorPoint.y + dragAmount.y).coerceIn(0f, imageSize.height.toFloat())
-                            currentAnchorPoint = Offset(newX, newY)
-                            onAnchorPointChanged(currentAnchorPoint)
-                        }
-                    }
+                    },
+                contentAlignment = Alignment.Center // The crosshair is centered in the box
             ) {
+                // Draw the previous image as a background ---
+                if (previousBitmap != null && previousAnchorPoint != null && renderedImageSize.width > 0 && renderedImageSize.height > 0) {
+                    // 1. Calculate the scaling factor of the previous bitmap
+                    val scaleX = previousBitmap.width.toFloat() / renderedImageSize.width
+                    val scaleY = previousBitmap.height.toFloat() / renderedImageSize.height
+
+                    // 2. Scale the anchor point to the rendered image's coordinate system
+                    val scaledAnchorX = previousAnchorPoint.x / scaleX
+                    val scaledAnchorY = previousAnchorPoint.y / scaleY
+
+                    // 3. Calculate the offset needed to move the scaled anchor point to the center of the container
+                    val previousImageOffset = Offset(
+                        x = (containerSize.width / 2f) - scaledAnchorX,
+                        y = (containerSize.height / 2f) - scaledAnchorY
+                    )
+
+                    Image(
+                        bitmap = previousImageBitmap!!,
+                        contentDescription = "Previous Image",
+                        modifier = Modifier
+                            .offset { IntOffset(previousImageOffset.x.roundToInt(), previousImageOffset.y.roundToInt()) }
+                            .fillMaxSize(),
+                        contentScale = ContentScale.Fit
+                    )
+                }
+                // The current image is now the draggable one, drawn on top.
                 Image(
-                    bitmap = imageBitmap,
+                    bitmap = currentImageBitmap,
                     contentDescription = "Cropped Image $imageIndex",
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .offset { IntOffset(imageOffset.x.roundToInt(), imageOffset.y.roundToInt()) }
+                        .fillMaxSize()
+                        .alpha(0.5f) // --- NEW: Apply 50% transparency ---
+                        .onGloballyPositioned { coordinates ->
+                            // Get the actual rendered size of the Image itself
+                            renderedImageSize = coordinates.size
+                        }
+                        .pointerInput(Unit) {
+                            detectDragGestures { change, dragAmount ->
+                                change.consume()
+                                imageOffset = imageOffset.plus(dragAmount)
+
+                                // Check to prevent division by zero during the first render pass
+                                if (renderedImageSize.width > 0 && renderedImageSize.height > 0) {
+                                    val crosshairX = containerSize.width / 2f
+                                    val crosshairY = containerSize.height / 2f
+
+                                    val crosshairOnRenderedImageX = crosshairX - imageOffset.x
+                                    val crosshairOnRenderedImageY = crosshairY - imageOffset.y
+
+                                    // Calculate the scaling factor
+                                    val scaleX = currentBitmap.width.toFloat() / renderedImageSize.width
+                                    val scaleY = currentBitmap.height.toFloat() / renderedImageSize.height
+
+                                    // Scale the position back to the original bitmap's coordinate system
+                                    val anchorX = crosshairOnRenderedImageX * scaleX
+                                    val anchorY = crosshairOnRenderedImageY * scaleY
+
+                                    onAnchorPointChanged(Offset(anchorX, anchorY))
+                                }
+                            }
+                        },
                     contentScale = ContentScale.Fit
                 )
 
+                // The crosshair is fixed in the center of the Box
                 androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
                     val crosshairSize = 30.dp.toPx()
                     val strokeWidth = 2.dp.toPx()
                     val crosshairColor = Color.Yellow
+                    val center = Offset(size.width / 2f, size.height / 2f)
 
                     drawLine(
                         color = crosshairColor,
-                        start = Offset(currentAnchorPoint.x - crosshairSize / 2, currentAnchorPoint.y),
-                        end = Offset(currentAnchorPoint.x + crosshairSize / 2, currentAnchorPoint.y),
+                        start = Offset(center.x - crosshairSize / 2, center.y),
+                        end = Offset(center.x + crosshairSize / 2, center.y),
                         strokeWidth = strokeWidth
                     )
                     drawLine(
                         color = crosshairColor,
-                        start = Offset(currentAnchorPoint.x, currentAnchorPoint.y - crosshairSize / 2),
-                        end = Offset(currentAnchorPoint.x, currentAnchorPoint.y + crosshairSize / 2),
+                        start = Offset(center.x, center.y - crosshairSize / 2),
+                        end = Offset(center.x, center.y + crosshairSize / 2),
                         strokeWidth = strokeWidth
                     )
                 }
@@ -893,7 +969,7 @@ fun GifPreviewScreen(
         AndroidView(
             factory = { ctx ->
                 android.widget.ImageView(ctx).apply {
-                    setBackgroundColor(android.graphics.Color.LTGRAY)
+                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
                     scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
                 }
             },
@@ -907,7 +983,7 @@ fun GifPreviewScreen(
                 .fillMaxWidth(0.8f)
                 .aspectRatio(1f)
                 .clip(RoundedCornerShape(8.dp))
-                .background(Color.DarkGray)
+                .background(Color.Transparent)
         )
 
         Spacer(Modifier.height(24.dp))
