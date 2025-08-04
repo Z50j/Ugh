@@ -64,6 +64,7 @@ import android.provider.MediaStore
 import android.content.ContentValues
 import android.os.Environment
 import android.util.Log
+import android.widget.ImageView
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.scale
 
@@ -210,20 +211,39 @@ class UghViewModel : ViewModel() {
         gifCompilationProgress = 0
 
         viewModelScope.launch(Dispatchers.IO) {
+            var outputStream: ByteArrayOutputStream?
+            var gifEncoder: AnimatedGifEncoder?
             try {
-                val outputStream = ByteArrayOutputStream()
-                val gifEncoder = AnimatedGifEncoder()
+                outputStream = ByteArrayOutputStream()
+                gifEncoder = AnimatedGifEncoder()
                 gifEncoder.start(outputStream)
                 gifEncoder.setDelay(150) // 150ms frame delay
                 gifEncoder.setRepeat(0) // 0 for infinite loop
 
-                val frames = generateWiggleFrames()
+                val baseFrames = generateWiggleFrames()
+                if (baseFrames.isEmpty()) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "No frames generated for GIF.", Toast.LENGTH_SHORT).show()
+                        _currentAppState.value = AppState.SELECT_IMAGE
+                    }
+                    return@launch // Exit the coroutine
+                }
 
-                for ((index, frameBitmap) in frames.withIndex()) {
+                val allGifFrames = mutableListOf<Bitmap>()
+                allGifFrames.addAll(baseFrames)
+
+                // Add frames in reverse order (excluding first and last to prevent duplicates at turnarounds)
+                if (baseFrames.size > 1) {
+                    for (i in baseFrames.size - 2 downTo 1) { // -2 to exclude last, downTo 1 to exclude first
+                        allGifFrames.add(baseFrames[i])
+                    }
+                }
+
+                for ((index, frameBitmap) in allGifFrames.withIndex()) {
                     gifEncoder.addFrame(frameBitmap)
                     // Update progress on the main thread
                     withContext(Dispatchers.Main) {
-                        gifCompilationProgress = ((index + 1).toFloat() / frames.size * 100).roundToInt()
+                        gifCompilationProgress = ((index + 1).toFloat() / allGifFrames.size * 100).roundToInt()
                     }
                 }
 
@@ -968,9 +988,9 @@ fun GifPreviewScreen(
 
         AndroidView(
             factory = { ctx ->
-                android.widget.ImageView(ctx).apply {
+                ImageView(ctx).apply {
                     setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                    scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+                    scaleType = ImageView.ScaleType.FIT_CENTER
                 }
             },
             update = { imageView ->
